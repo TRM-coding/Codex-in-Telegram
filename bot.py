@@ -17,7 +17,7 @@ import time
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable
+from typing import Awaitable, Callable, Iterable
 
 from telegram import Update
 from telegram.constants import ChatAction
@@ -35,8 +35,11 @@ TELEGRAM_LIMIT = 4096
 RESERVED_SUFFIX = "\n\n[output truncated]"
 DEFAULT_TIMEOUT_SECONDS = 900
 TYPING_REFRESH_SECONDS = 4
+STATUS_UPDATE_SECONDS = 2.0
+STATUS_MESSAGE_LIMIT = 1200
 DEFAULT_IMAGE_PROMPT = "请分析这张图片。"
 GRANT_COMMAND_ALIASES = ("grant", "permission", "permit", "allow", "xxx")
+StatusCallback = Callable[[str, bool], Awaitable[None]]
 
 
 @dataclass(frozen=True)
@@ -393,11 +396,139 @@ def parse_codex_json_stdout(stdout: str) -> tuple[str | None, str]:
     return thread_id, final_text
 
 
+def truncate_text(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    if limit <= 3:
+        return text[:limit]
+    return text[: limit - 3] + "..."
+
+
+def format_command_output(output: str, *, max_lines: int = 6, max_chars: int = 500) -> str:
+    output = output.strip()
+    if not output:
+        return ""
+
+    lines = output.splitlines()
+    if len(lines) > max_lines:
+        lines = ["..."] + lines[-max_lines:]
+    return truncate_text("\n".join(lines), max_chars)
+
+
+def format_codex_status(text: str) -> str:
+    return truncate_text(f"Codex status:\n{text.strip()}", STATUS_MESSAGE_LIMIT)
+
+
+def format_codex_progress_event(event: dict) -> str | None:
+    event_type = event.get("type")
+
+    if event_type == "thread.started":
+        thread_id = event.get("thread_id")
+        if thread_id:
+            return f"Started session\n{thread_id}"
+        return "Started a new session"
+
+    if event_type == "turn.started":
+        return "Working on the request..."
+
+    if event_type == "turn.completed":
+        return "Completed. Sending the final answer..."
+
+    if event_type not in {"item.started", "item.updated", "item.completed"}:
+        return None
+
+    item = event.get("item")
+    if not isinstance(item, dict):
+        return None
+
+    item_type = item.get("type")
+    if item_type == "command_execution":
+        command = str(item.get("command") or "").strip()
+        command = truncate_text(command, 350)
+        exit_code = item.get("exit_code")
+
+        if event_type == "item.completed" or item.get("status") == "completed":
+            status = f"Finished command"
+            if exit_code is not None:
+                status += f" (exit {exit_code})"
+        else:
+            status = "Running command"
+
+        parts = [status]
+        if command:
+            parts.append(command)
+
+        output = format_command_output(str(item.get("aggregated_output") or ""))
+        if output:
+            parts.append(f"Latest output:\n{output}")
+        return "\n\n".join(parts)
+
+    if item_type == "agent_message":
+        return "Writing the final answer..."
+
+    if item_type in {"reasoning", "agent_reasoning"}:
+        return "Reasoning..."
+
+    if isinstance(item_type, str) and item_type:
+        label = item_type.replace("_", " ")
+        if event_type == "item.completed":
+            return f"Completed {label}."
+        return f"Working on {label}..."
+
+    return None
+
+
+async def write_process_stdin(
+    process: asyncio.subprocess.Process, prompt: str
+) -> None:
+    if process.stdin is None:
+        return
+
+    try:
+        process.stdin.write(prompt.encode("utf-8"))
+        await process.stdin.drain()
+    except (BrokenPipeError, ConnectionResetError):
+        pass
+    finally:
+        process.stdin.close()
+        try:
+            await process.stdin.wait_closed()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+
+async def read_codex_stdout(
+    stream: asyncio.StreamReader,
+    lines: list[str],
+    status_callback: StatusCallback | None,
+) -> None:
+    while True:
+        line_bytes = await stream.readline()
+        if not line_bytes:
+            break
+
+        line = line_bytes.decode("utf-8", errors="replace").rstrip("\n")
+        lines.append(line)
+
+        if status_callback is None:
+            continue
+
+        try:
+            event = json.loads(line.strip())
+        except json.JSONDecodeError:
+            continue
+
+        status = format_codex_progress_event(event)
+        if status:
+            await status_callback(format_codex_status(status), False)
+
+
 async def run_codex(
     settings: Settings,
     prompt: str,
     thread_id: str | None = None,
     image_paths: Iterable[Path] = (),
+    status_callback: StatusCallback | None = None,
 ) -> tuple[int, str, str, str | None]:
     image_paths = tuple(image_paths)
     codex_options = settings.codex_resume_options if thread_id else settings.codex_exec_options
@@ -425,14 +556,31 @@ async def run_codex(
             cwd=settings.codex_workdir,
         )
 
+        stdout_lines: list[str] = []
+        stdout_task: asyncio.Task[None] | None = None
+        stderr_task: asyncio.Task[bytes] | None = None
+
         try:
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                process.communicate(prompt.encode("utf-8")),
+            if process.stdout is None or process.stderr is None:
+                raise RuntimeError("Codex process streams were not created")
+
+            stdout_task = asyncio.create_task(
+                read_codex_stdout(process.stdout, stdout_lines, status_callback)
+            )
+            stderr_task = asyncio.create_task(process.stderr.read())
+            await write_process_stdin(process, prompt)
+            await asyncio.wait_for(
+                process.wait(),
                 timeout=settings.codex_timeout_seconds,
             )
+            await stdout_task
+            stderr_bytes = await stderr_task
         except asyncio.TimeoutError:
             process.kill()
-            await process.communicate()
+            await process.wait()
+            tasks = [task for task in (stdout_task, stderr_task) if task is not None]
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
             return (
                 124,
                 "",
@@ -440,13 +588,18 @@ async def run_codex(
                 thread_id,
             )
 
-        stdout = stdout_bytes.decode("utf-8", errors="replace").strip()
+        stdout = "\n".join(stdout_lines).strip()
         stderr = stderr_bytes.decode("utf-8", errors="replace").strip()
         parsed_thread_id, json_answer = parse_codex_json_stdout(stdout)
 
         final_answer = ""
         if output_file.exists():
             final_answer = output_file.read_text(encoding="utf-8", errors="replace").strip()
+
+        if status_callback is not None:
+            await status_callback(
+                format_codex_status("Completed. Sending the final answer..."), True
+            )
 
         return (
             process.returncode or 0,
@@ -557,6 +710,17 @@ async def keep_typing(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None:
         except TelegramError:
             logging.exception("Failed to send typing action for chat_id=%s", chat_id)
         await asyncio.sleep(TYPING_REFRESH_SECONDS)
+
+
+async def edit_status_message(message, text: str) -> None:
+    try:
+        await message.edit_text(text, disable_web_page_preview=True)
+    except BadRequest as exc:
+        if "Message is not modified" in str(exc):
+            return
+        logging.exception("Telegram rejected status update")
+    except TelegramError:
+        logging.exception("Failed to update Telegram status message")
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -919,8 +1083,31 @@ async def handle_codex_prompt(
     message = update.effective_message
     chat = update.effective_chat
     user = update.effective_user
+    status_message = None
     if message is not None:
-        await message.reply_text("Running Codex...")
+        status_message = await message.reply_text(
+            format_codex_status("Queued. Waiting for an available Codex slot...")
+        )
+
+    last_status_text = ""
+    last_status_at = 0.0
+    pending_status_text: str | None = None
+
+    async def publish_status(text: str, force: bool = False) -> None:
+        nonlocal last_status_at, last_status_text, pending_status_text
+        if status_message is None:
+            return
+
+        pending_status_text = text
+        now = time.monotonic()
+        if not force and now - last_status_at < STATUS_UPDATE_SECONDS:
+            return
+        if pending_status_text == last_status_text:
+            return
+
+        await edit_status_message(status_message, pending_status_text)
+        last_status_text = pending_status_text
+        last_status_at = now
 
     thread_id = store.get_thread_id(chat.id) if chat else None
     typing_task = (
@@ -928,8 +1115,16 @@ async def handle_codex_prompt(
     )
     try:
         async with semaphore:
+            await publish_status(
+                format_codex_status("Starting Codex..."),
+                True,
+            )
             returncode, answer, stderr, new_thread_id = await run_codex(
-                settings, prompt, thread_id, image_paths
+                settings,
+                prompt,
+                thread_id,
+                image_paths,
+                status_callback=publish_status,
             )
     finally:
         if typing_task is not None:

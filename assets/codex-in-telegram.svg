@@ -1,0 +1,224 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="590" viewBox="0 0 1280 590" role="img" aria-labelledby="title desc">
+  <title id="title">Codex in Telegram architecture</title>
+  <desc id="desc">A dark architecture diagram showing Telegram messages flowing through a Python bridge bot into a local Codex CLI session.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#050816"/>
+      <stop offset="0.55" stop-color="#07111f"/>
+      <stop offset="1" stop-color="#020510"/>
+    </linearGradient>
+    <linearGradient id="cyan" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#2d8cff"/>
+      <stop offset="1" stop-color="#4df1ff"/>
+    </linearGradient>
+    <linearGradient id="green" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#35f59a"/>
+      <stop offset="1" stop-color="#18d6c9"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="5" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="0 0 0 0 0.05 0 0 0 0 0.85 0 0 0 0 1 0 0 0 0.75 0"/>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="0" stdDeviation="10" flood-color="#16d9ff" flood-opacity="0.35"/>
+    </filter>
+    <style>
+      .small { font: 14px ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; fill: #b8c7d9; }
+      .body { font: 17px ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; fill: #d8e8f7; }
+      .label { font: 18px ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; font-weight: 700; fill: #f6fbff; }
+      .title { font: 56px ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; font-weight: 800; fill: #f7fbff; }
+      .mono { font: 15px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fill: #aef6bd; }
+      .muted { fill: #7f94aa; }
+      .panel { fill: rgba(8, 18, 34, 0.78); stroke: #1e79c7; stroke-opacity: 0.75; stroke-width: 1.5; }
+      .line { stroke: #2ee8ff; stroke-width: 3; stroke-linecap: round; filter: url(#glow); }
+    </style>
+  </defs>
+
+  <rect width="1280" height="590" fill="url(#bg)"/>
+  <g opacity="0.18">
+    <circle cx="1050" cy="70" r="2" fill="#2ee8ff"/>
+    <circle cx="1070" cy="70" r="2" fill="#2ee8ff"/>
+    <circle cx="1090" cy="70" r="2" fill="#2ee8ff"/>
+    <circle cx="1110" cy="70" r="2" fill="#2ee8ff"/>
+    <circle cx="1050" cy="90" r="2" fill="#2ee8ff"/>
+    <circle cx="1070" cy="90" r="2" fill="#2ee8ff"/>
+    <circle cx="1090" cy="90" r="2" fill="#2ee8ff"/>
+    <circle cx="1110" cy="90" r="2" fill="#2ee8ff"/>
+    <circle cx="1180" cy="475" r="2" fill="#2ee8ff"/>
+    <circle cx="1200" cy="475" r="2" fill="#2ee8ff"/>
+    <circle cx="1220" cy="475" r="2" fill="#2ee8ff"/>
+    <circle cx="1180" cy="495" r="2" fill="#2ee8ff"/>
+    <circle cx="1200" cy="495" r="2" fill="#2ee8ff"/>
+    <circle cx="1220" cy="495" r="2" fill="#2ee8ff"/>
+  </g>
+
+  <path d="M500 520 C610 565 735 500 835 515 C905 528 958 556 1040 523" fill="none" stroke="#0877ce" stroke-width="2" opacity="0.45"/>
+  <path d="M520 502 C640 555 715 490 820 497" fill="none" stroke="#19e1ff" stroke-width="2" opacity="0.35" stroke-dasharray="2 8"/>
+
+  <g transform="translate(34 70)">
+    <path d="M38 0 74 21 74 63 38 84 2 63 2 21Z" fill="none" stroke="url(#cyan)" stroke-width="4" filter="url(#glow)"/>
+    <path d="M25 28 43 42 25 56" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M48 58h15" stroke="#fff" stroke-width="5" stroke-linecap="round"/>
+    <text x="92" y="60" class="title">Codex in <tspan fill="#45cfff">Telegram</tspan></text>
+    <rect x="0" y="104" width="4" height="76" rx="2" fill="#1de2ff"/>
+    <text x="18" y="122" class="body">Connect your local Codex CLI to Telegram,</text>
+    <text x="18" y="150" class="body">launch tasks in chat, and receive results</text>
+    <text x="18" y="178" class="body">on your phone.</text>
+  </g>
+
+  <g transform="translate(30 278)">
+    <g>
+      <rect class="panel" x="0" y="0" width="142" height="216" rx="8"/>
+      <circle cx="72" cy="48" r="27" fill="none" stroke="#1588ff" stroke-width="4" filter="url(#glow)"/>
+      <path d="M57 47h31M57 58h18" stroke="#55d7ff" stroke-width="4" stroke-linecap="round"/>
+      <circle cx="92" cy="65" r="11" fill="#07111f" stroke="#55d7ff" stroke-width="3"/>
+      <text x="72" y="102" text-anchor="middle" class="label">Persistent</text>
+      <text x="72" y="126" text-anchor="middle" class="label">Sessions</text>
+      <text x="72" y="155" text-anchor="middle" class="small">Keep context</text>
+      <text x="72" y="176" text-anchor="middle" class="small">across chats and</text>
+      <text x="72" y="197" text-anchor="middle" class="small">continue tasks</text>
+    </g>
+    <g transform="translate(150 0)">
+      <rect class="panel" x="0" y="0" width="142" height="216" rx="8"/>
+      <path d="M72 20 98 32v30c0 25-14 41-26 50-12-9-26-25-26-50V32Z" fill="none" stroke="#36f6bb" stroke-width="4" filter="url(#glow)"/>
+      <rect x="61" y="52" width="22" height="27" rx="4" fill="none" stroke="#b9ffde" stroke-width="3"/>
+      <circle cx="72" cy="66" r="3" fill="#b9ffde"/>
+      <text x="72" y="102" text-anchor="middle" class="label">Permission</text>
+      <text x="72" y="126" text-anchor="middle" class="label">Control</text>
+      <text x="72" y="155" text-anchor="middle" class="small">Switch access</text>
+      <text x="72" y="176" text-anchor="middle" class="small">modes flexibly</text>
+      <text x="72" y="197" text-anchor="middle" class="small">and stay safe</text>
+    </g>
+    <g transform="translate(300 0)">
+      <rect class="panel" x="0" y="0" width="142" height="216" rx="8"/>
+      <rect x="57" y="18" width="32" height="58" rx="5" fill="none" stroke="#8877ff" stroke-width="4" filter="url(#glow)"/>
+      <path d="M69 25h8M69 68h8" stroke="#d4ceff" stroke-width="3" stroke-linecap="round"/>
+      <text x="72" y="102" text-anchor="middle" class="label">Mobile</text>
+      <text x="72" y="126" text-anchor="middle" class="label">Control</text>
+      <text x="72" y="155" text-anchor="middle" class="small">Start tasks</text>
+      <text x="72" y="176" text-anchor="middle" class="small">anywhere and</text>
+      <text x="72" y="197" text-anchor="middle" class="small">receive results</text>
+    </g>
+  </g>
+
+  <g transform="translate(500 235)">
+    <circle cx="31" cy="31" r="31" fill="#0b2749" stroke="#1bb8ff" stroke-width="2" filter="url(#glow)"/>
+    <path d="M17 31 47 18 39 48 31 36Z" fill="#fff"/>
+    <text x="0" y="83" class="body">Telegram</text>
+  </g>
+  <path class="line" d="M565 266h36"/>
+  <path d="M598 258 611 266 598 274" fill="none" stroke="#8af8ff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <g transform="translate(598 54)">
+    <rect x="0" y="0" width="201" height="430" rx="38" fill="#070b12" stroke="#6b6f78" stroke-width="3"/>
+    <rect x="12" y="15" width="177" height="400" rx="30" fill="#101925"/>
+    <text x="28" y="33" class="small" fill="#edf4ff">9:41</text>
+    <circle cx="54" cy="52" r="12" fill="#2aa8ff"/>
+    <text x="73" y="50" class="small" fill="#fff" font-weight="700">Codex Bot</text>
+    <text x="73" y="66" class="small">bot</text>
+    <rect x="52" y="91" width="126" height="38" rx="8" fill="#1976d2"/>
+    <text x="63" y="113" class="small" fill="#fff">/new  Build a todo CLI</text>
+    <rect x="27" y="154" width="128" height="62" rx="8" fill="#1b2735"/>
+    <circle cx="38" cy="168" r="7" fill="#22d36d"/>
+    <path d="m34 168 3 3 6-7" fill="none" stroke="#fff" stroke-width="2"/>
+    <text x="52" y="171" class="small" fill="#f8fffb">Task created</text>
+    <text x="36" y="194" class="small">Session: 7f3a9c2e</text>
+    <text x="36" y="211" class="small">Permission: workspace-write</text>
+    <rect x="62" y="237" width="118" height="42" rx="8" fill="#1976d2"/>
+    <text x="73" y="260" class="small" fill="#fff">/run Continue edits</text>
+    <rect x="27" y="313" width="132" height="78" rx="8" fill="#1b2735"/>
+    <circle cx="38" cy="330" r="7" fill="#22d36d"/>
+    <path d="m34 330 3 3 6-7" fill="none" stroke="#fff" stroke-width="2"/>
+    <text x="52" y="334" class="small" fill="#f8fffb">Task finished</text>
+    <text x="36" y="358" class="small">Modified 3 files</text>
+    <text x="36" y="376" class="small">See execution result</text>
+  </g>
+
+  <path class="line" d="M805 266h28"/>
+  <path d="M830 258 843 266 830 274" fill="none" stroke="#8af8ff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <g transform="translate(835 116)">
+    <rect class="panel" x="0" y="0" width="142" height="312" rx="14" filter="url(#soft)"/>
+    <text x="71" y="28" text-anchor="middle" class="label">Bridge Layer</text>
+    <text x="71" y="52" text-anchor="middle" class="label">Python Bot</text>
+    <rect x="36" y="80" width="72" height="50" rx="12" fill="#101925" stroke="#274663"/>
+    <path d="M66 79c-20 0-29 10-29 24h31v14H51c-12 0-21 9-21 20v9h36v-13h28c17 0 27-10 27-26V79Z" fill="#3776ab"/>
+    <path d="M77 154c20 0 29-10 29-24H75v-14h17c12 0 21-9 21-20v-9H77v13H49c-17 0-27 10-27 26v28Z" fill="#ffd343"/>
+    <g transform="translate(14 158)">
+      <rect x="0" y="0" width="114" height="38" rx="7" fill="#101925" stroke="#1e79c7" stroke-opacity=".55"/>
+      <text x="38" y="24" class="small" fill="#e4f5ff">Message Parsing</text>
+      <path d="M15 13h15v12h-9l-6 6v-6h0z" fill="none" stroke="#bfeeff" stroke-width="2"/>
+    </g>
+    <g transform="translate(14 204)">
+      <rect x="0" y="0" width="114" height="38" rx="7" fill="#101925" stroke="#1e79c7" stroke-opacity=".55"/>
+      <text x="38" y="24" class="small" fill="#e4f5ff">Session Mgmt</text>
+      <path d="M14 21c7-11 19-11 26 0M15 15l-1 6 6-1M39 27l1-6-6 1" fill="none" stroke="#bfeeff" stroke-width="2" stroke-linecap="round"/>
+    </g>
+    <g transform="translate(14 250)">
+      <rect x="0" y="0" width="114" height="38" rx="7" fill="#101925" stroke="#1e79c7" stroke-opacity=".55"/>
+      <text x="38" y="24" class="small" fill="#e4f5ff">Result Return</text>
+      <path d="M16 19h22M28 9l10 10-10 10" fill="none" stroke="#bfeeff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+  </g>
+
+  <path class="line" d="M982 266h28"/>
+  <path d="M1007 258 1020 266 1007 274" fill="none" stroke="#8af8ff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <g transform="translate(996 99)">
+    <rect x="0" y="0" width="200" height="336" rx="13" fill="#080d14" stroke="#465060" stroke-width="2"/>
+    <circle cx="18" cy="17" r="5" fill="#ff5f56"/>
+    <circle cx="34" cy="17" r="5" fill="#ffbd2e"/>
+    <circle cx="50" cy="17" r="5" fill="#27c93f"/>
+    <text x="100" y="21" text-anchor="middle" class="small">codex</text>
+    <text x="17" y="52" class="mono">$ codex</text>
+    <text x="17" y="82" class="mono" fill="#4bd7ff">Codex CLI</text>
+    <text x="17" y="105" class="small">Local environment</text>
+    <text x="17" y="142" class="mono">&gt; Running task...</text>
+    <text x="18" y="166" class="mono">[x] Analyze request</text>
+    <text x="18" y="188" class="mono">[x] Generate plan</text>
+    <text x="18" y="210" class="mono">[x] Implement features</text>
+    <text x="18" y="232" class="mono">[x] Run tests</text>
+    <text x="17" y="270" class="mono">&gt; Result</text>
+    <text x="31" y="294" class="small">Modified 3 files</text>
+    <text x="31" y="314" class="small">All tests passed</text>
+  </g>
+
+  <path class="line" d="M1203 266h37"/>
+  <circle cx="1240" cy="266" r="30" fill="#0b221f" stroke="#37f4d4" stroke-width="2" filter="url(#glow)"/>
+  <path d="M1230 253 1244 266 1230 279" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M1249 282h14" stroke="#fff" stroke-width="4" stroke-linecap="round"/>
+  <text x="1218" y="326" class="body">Codex CLI</text>
+  <text x="1216" y="351" class="body">(Local)</text>
+
+  <g transform="translate(858 472)">
+    <rect class="panel" x="0" y="0" width="214" height="78" rx="8"/>
+    <text x="20" y="27" class="mono">{</text>
+    <text x="38" y="27" class="mono" fill="#9cd2ff">"session_id"</text>
+    <text x="142" y="27" class="mono">: "7f3a9c2e",</text>
+    <text x="38" y="51" class="mono" fill="#9cd2ff">"status"</text>
+    <text x="112" y="51" class="mono">: "running"</text>
+    <text x="20" y="69" class="mono">}</text>
+  </g>
+  <g transform="translate(1090 456)">
+    <rect class="panel" x="0" y="0" width="158" height="94" rx="8"/>
+    <text x="17" y="29" class="small" fill="#edf4ff">Sessions</text>
+    <text x="17" y="56" class="small">7f3a9c2e</text>
+    <circle cx="94" cy="51" r="4" fill="#35f59a"/>
+    <text x="105" y="56" class="small" fill="#35f59a">active</text>
+    <text x="17" y="80" class="small">2b8d1a7f</text>
+    <circle cx="94" cy="75" r="4" fill="#f4ca45"/>
+    <text x="105" y="80" class="small">idle</text>
+  </g>
+
+  <g transform="translate(35 535)">
+    <circle cx="19" cy="12" r="18" fill="#07233c" stroke="#0e8ed0"/>
+    <path d="M11 13c6-8 11-9 16-4 5 5 4 10-4 16M27 11c-6 8-11 9-16 4-5-5-4-10 4-16" fill="none" stroke="#31f1ff" stroke-width="3" stroke-linecap="round"/>
+    <text x="50" y="18" class="body">Lightweight bridge plugin</text>
+    <text x="270" y="18" class="body muted">-</text>
+    <text x="290" y="18" class="body">Telegram Bot x Codex CLI</text>
+  </g>
+</svg>

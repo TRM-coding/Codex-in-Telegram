@@ -16,6 +16,8 @@ Run your local Codex CLI from Telegram, keep Codex sessions per chat, and receiv
 
 ## 中文
 
+![Codex in Telegram 架构图](assets/codex-in-telegram-cn.jpg)
+
 ### 项目介绍
 
 **Codex to Telegram** 是一个把 Telegram Bot 和本地 Codex CLI 连接起来的轻量桥接插件。配置完成后，你可以直接在 Telegram 里给 Codex 发送任务，Codex 会在指定工作目录中执行请求，并把最终回答返回到 Telegram。
@@ -27,6 +29,7 @@ Run your local Codex CLI from Telegram, keep Codex sessions per chat, and receiv
 | 能力 | 说明 |
 | --- | --- |
 | 通过 Telegram 调用 Codex | 发送普通文本消息，或使用 `/codex <request>` 发起 Codex 请求。 |
+| 实时状态回显 | Bot 会编辑运行中消息，显示 Codex session、正在执行的命令和最近输出。 |
 | 保持连续会话 | 每个 Telegram chat 会保存自己的 Codex session，后续消息会自动 resume。 |
 | 会话管理 | 使用 `/session` 查看当前 session，`/new` 开启新会话，`/history` 查看历史，`/resume` 恢复指定会话。 |
 | 用户访问控制 | 只有 `TELEGRAM_ALLOWED_USER_IDS` 中的 Telegram 用户可以运行 Codex。 |
@@ -44,6 +47,12 @@ Python Telegram bot
        |
        v
 codex exec --cd "$CODEX_WORKDIR" -
+       |
+       v
+Live Codex JSONL events
+       |
+       v
+Edited Telegram status message
        |
        v
 Final Codex answer
@@ -180,6 +189,8 @@ sudo journalctl -u codex-telegram.service -f
 
 ## English
 
+![Codex in Telegram architecture](assets/codex-in-telegram.svg)
+
 ### Overview
 
 **Codex to Telegram** is a lightweight bridge between a Telegram bot and your local Codex CLI. Once configured, you can send Codex tasks from Telegram, run them inside a chosen working directory, and receive the final Codex answer back in the chat.
@@ -191,6 +202,7 @@ It is useful when Codex runs on a development machine, server, or home lab box, 
 | Feature | Description |
 | --- | --- |
 | Run Codex from Telegram | Send a plain text message, or use `/codex <request>` to start a Codex task. |
+| Live status echo | The bot edits the in-progress message with the Codex session, running command, and latest output. |
 | Persistent sessions | Each Telegram chat keeps its own Codex session and resumes it automatically. |
 | Session management | Use `/session`, `/new`, `/history`, and `/resume` to inspect and switch sessions. |
 | User allowlist | Only Telegram users listed in `TELEGRAM_ALLOWED_USER_IDS` can run Codex. |
@@ -208,6 +220,12 @@ Python Telegram bot
        |
        v
 codex exec --cd "$CODEX_WORKDIR" -
+       |
+       v
+Live Codex JSONL events
+       |
+       v
+Edited Telegram status message
        |
        v
 Final Codex answer
