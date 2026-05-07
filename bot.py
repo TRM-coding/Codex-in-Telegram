@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import mimetypes
 import os
 import shlex
 import shutil
@@ -13,14 +14,14 @@ import sqlite3
 import subprocess
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
 from telegram import Update
 from telegram.constants import ChatAction
-from telegram.error import BadRequest
+from telegram.error import BadRequest, TelegramError
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -33,6 +34,9 @@ from telegram.ext import (
 TELEGRAM_LIMIT = 4096
 RESERVED_SUFFIX = "\n\n[output truncated]"
 DEFAULT_TIMEOUT_SECONDS = 900
+TYPING_REFRESH_SECONDS = 4
+DEFAULT_IMAGE_PROMPT = "请分析这张图片。"
+GRANT_COMMAND_ALIASES = ("grant", "permission", "permit", "allow", "xxx")
 
 
 @dataclass(frozen=True)
@@ -118,6 +122,7 @@ def get_codex_options(codex_binary: str, subcommand: list[str]) -> frozenset[str
             "--output-last-message",
             "--color",
             "--json",
+            "--image",
         )
         if option in help_text
     )
@@ -288,7 +293,14 @@ class SessionStore:
         return [(str(row[0]), int(row[1]), int(row[2])) for row in rows]
 
 
-def build_codex_command(settings: Settings, output_file: Path) -> list[str]:
+def append_image_options(command: list[str], image_paths: Iterable[Path]) -> None:
+    for image_path in image_paths:
+        command.extend(["--image", str(image_path)])
+
+
+def build_codex_command(
+    settings: Settings, output_file: Path, image_paths: Iterable[Path] = ()
+) -> list[str]:
     command = [
         settings.codex_binary,
         "exec",
@@ -318,13 +330,17 @@ def build_codex_command(settings: Settings, output_file: Path) -> list[str]:
         command.append("--skip-git-repo-check")
     if settings.codex_extra_args:
         command.extend(settings.codex_extra_args)
+    append_image_options(command, image_paths)
 
     command.extend(["--cd", str(settings.codex_workdir), "-"])
     return command
 
 
 def build_codex_resume_command(
-    settings: Settings, output_file: Path, thread_id: str
+    settings: Settings,
+    output_file: Path,
+    thread_id: str,
+    image_paths: Iterable[Path] = (),
 ) -> list[str]:
     command = [
         settings.codex_binary,
@@ -346,6 +362,7 @@ def build_codex_resume_command(
         and "--skip-git-repo-check" in settings.codex_resume_options
     ):
         command.append("--skip-git-repo-check")
+    append_image_options(command, image_paths)
 
     command.append("-")
     return command
@@ -377,14 +394,27 @@ def parse_codex_json_stdout(stdout: str) -> tuple[str | None, str]:
 
 
 async def run_codex(
-    settings: Settings, prompt: str, thread_id: str | None = None
+    settings: Settings,
+    prompt: str,
+    thread_id: str | None = None,
+    image_paths: Iterable[Path] = (),
 ) -> tuple[int, str, str, str | None]:
+    image_paths = tuple(image_paths)
+    codex_options = settings.codex_resume_options if thread_id else settings.codex_exec_options
+    if image_paths and "--image" not in codex_options:
+        return (
+            2,
+            "",
+            "This Codex CLI does not support image attachments. Upgrade Codex or remove the image.",
+            thread_id,
+        )
+
     with tempfile.TemporaryDirectory(prefix="codex-telegram-") as tmpdir:
         output_file = Path(tmpdir) / "last-message.txt"
         command = (
-            build_codex_resume_command(settings, output_file, thread_id)
+            build_codex_resume_command(settings, output_file, thread_id, image_paths)
             if thread_id
-            else build_codex_command(settings, output_file)
+            else build_codex_command(settings, output_file, image_paths)
         )
 
         process = await asyncio.create_subprocess_exec(
@@ -451,6 +481,31 @@ def format_timestamp(timestamp: int) -> str:
     return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def format_permission_status(settings: Settings) -> str:
+    mode = "full" if settings.codex_dangerously_bypass else settings.codex_sandbox
+    return (
+        "Codex permission status:\n"
+        f"Mode: {mode}\n"
+        f"Sandbox: {settings.codex_sandbox}\n"
+        f"Approval: {settings.codex_approval}\n"
+        f"Bypass approvals and sandbox: {settings.codex_dangerously_bypass}"
+    )
+
+
+def grant_usage(settings: Settings) -> str:
+    return (
+        f"{format_permission_status(settings)}\n\n"
+        "Usage:\n"
+        "/grant status\n"
+        "/grant workspace\n"
+        "/grant read-only\n"
+        "/grant full\n\n"
+        "`/grant full` runs Codex with "
+        "`--dangerously-bypass-approvals-and-sandbox` until the bot restarts or "
+        "another /grant mode is selected."
+    )
+
+
 def help_text() -> str:
     return (
         "Available commands:\n\n"
@@ -462,6 +517,8 @@ def help_text() -> str:
         "Show your Telegram user id and chat id.\n\n"
         "/codex <request>\n"
         "Send a request to Codex. Plain text messages do the same thing.\n\n"
+        "Photos and image files\n"
+        "Send an image with an optional caption to ask Codex about it.\n\n"
         "/session\n"
         "Show the current Codex session id for this chat.\n\n"
         "/new\n"
@@ -470,11 +527,14 @@ def help_text() -> str:
         "List recent Codex sessions saved for this chat.\n\n"
         "/resume <session_id>\n"
         "Switch this chat back to a previous Codex session.\n\n"
+        "/grant <status|workspace|read-only|full>\n"
+        "Show or change the Codex execution permission mode.\n\n"
         "Examples:\n"
         "/codex 请解释当前项目结构\n"
         "/new\n"
         "/history\n"
-        "/resume 00000000-0000-0000-0000-000000000000"
+        "/resume 00000000-0000-0000-0000-000000000000\n"
+        "/grant full"
     )
 
 
@@ -483,6 +543,20 @@ async def send_text(update: Update, text: str) -> None:
         return
     for chunk in chunk_text(text):
         await update.effective_message.reply_text(chunk, disable_web_page_preview=True)
+
+
+async def keep_typing(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None:
+    while True:
+        try:
+            await context.bot.send_chat_action(
+                chat_id=chat_id, action=ChatAction.TYPING
+            )
+        except BadRequest:
+            logging.exception("Telegram rejected typing action for chat_id=%s", chat_id)
+            return
+        except TelegramError:
+            logging.exception("Failed to send typing action for chat_id=%s", chat_id)
+        await asyncio.sleep(TYPING_REFRESH_SECONDS)
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -659,6 +733,60 @@ async def resume_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await send_text(update, f"Switched current Codex session to:\n{thread_id}")
 
 
+async def grant_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    settings: Settings = context.application.bot_data["settings"]
+    user = update.effective_user
+    chat = update.effective_chat
+    mode = context.args[0].strip().lower() if context.args else "status"
+
+    logging.info(
+        "Received /grant from user_id=%s chat_id=%s mode=%s",
+        user.id if user else "unknown",
+        chat.id if chat else "unknown",
+        mode,
+    )
+
+    if not is_authorized(settings, update):
+        await send_text(update, "You are not authorized to change Codex permissions.")
+        return
+
+    if mode in {"status", "show"}:
+        await send_text(update, grant_usage(settings))
+        return
+
+    if mode in {"workspace", "workspace-write", "safe"}:
+        new_settings = replace(
+            settings,
+            codex_sandbox="workspace-write",
+            codex_approval="never",
+            codex_dangerously_bypass=False,
+        )
+    elif mode in {"read-only", "readonly", "ro"}:
+        new_settings = replace(
+            settings,
+            codex_sandbox="read-only",
+            codex_approval="never",
+            codex_dangerously_bypass=False,
+        )
+    elif mode in {"full", "danger", "danger-full-access", "bypass"}:
+        new_settings = replace(
+            settings,
+            codex_sandbox="danger-full-access",
+            codex_approval="never",
+            codex_dangerously_bypass=True,
+        )
+    else:
+        await send_text(update, grant_usage(settings))
+        return
+
+    context.application.bot_data["settings"] = new_settings
+    await send_text(
+        update,
+        "Codex permission mode updated.\n\n"
+        f"{format_permission_status(new_settings)}",
+    )
+
+
 async def codex_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     prompt = " ".join(context.args).strip()
     logging.info(
@@ -686,8 +814,80 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await handle_codex_prompt(update, context, message.text.strip())
 
 
+async def download_message_images(message, target_dir: Path) -> list[Path]:
+    image_paths: list[Path] = []
+
+    if message.photo:
+        image_path = target_dir / f"telegram-photo-{message.message_id}.jpg"
+        telegram_file = await message.photo[-1].get_file()
+        await telegram_file.download_to_drive(custom_path=str(image_path))
+        image_paths.append(image_path)
+
+    document = message.document
+    if document and document.mime_type and document.mime_type.startswith("image/"):
+        suffix = Path(document.file_name or "").suffix
+        if not suffix:
+            suffix = mimetypes.guess_extension(document.mime_type) or ".img"
+        image_path = target_dir / f"telegram-image-{message.message_id}{suffix}"
+        telegram_file = await document.get_file()
+        await telegram_file.download_to_drive(custom_path=str(image_path))
+        image_paths.append(image_path)
+
+    return image_paths
+
+
+async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    if message is None:
+        return
+    settings: Settings = context.application.bot_data["settings"]
+
+    logging.info(
+        "Received image from user_id=%s chat_id=%s has_caption=%s",
+        update.effective_user.id if update.effective_user else "unknown",
+        update.effective_chat.id if update.effective_chat else "unknown",
+        bool(message.caption),
+    )
+
+    if not settings.allowed_user_ids:
+        logging.warning("Rejected image request because TELEGRAM_ALLOWED_USER_IDS is empty")
+        await send_text(
+            update,
+            "Codex access is disabled until TELEGRAM_ALLOWED_USER_IDS is configured. "
+            "Use /id to get your Telegram user id.",
+        )
+        return
+
+    if not is_authorized(settings, update):
+        logging.warning(
+            "Rejected unauthorized image from user_id=%s chat_id=%s",
+            update.effective_user.id if update.effective_user else "unknown",
+            update.effective_chat.id if update.effective_chat else "unknown",
+        )
+        await send_text(update, "You are not authorized to use this bot.")
+        return
+
+    with tempfile.TemporaryDirectory(prefix="codex-telegram-image-") as tmpdir:
+        try:
+            image_paths = await download_message_images(message, Path(tmpdir))
+        except TelegramError:
+            logging.exception("Failed to download Telegram image")
+            await send_text(update, "Failed to download the image from Telegram.")
+            return
+
+        if not image_paths:
+            await send_text(update, "No supported image was found in this message.")
+            return
+
+        prompt = (message.caption or "").strip() or DEFAULT_IMAGE_PROMPT
+        await handle_codex_prompt(update, context, prompt, image_paths=image_paths)
+
+
 async def handle_codex_prompt(
-    update: Update, context: ContextTypes.DEFAULT_TYPE, prompt: str
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    prompt: str,
+    image_paths: Iterable[Path] = (),
 ) -> None:
     settings: Settings = context.application.bot_data["settings"]
     semaphore: asyncio.Semaphore = context.application.bot_data["codex_semaphore"]
@@ -711,7 +911,8 @@ async def handle_codex_prompt(
         await send_text(update, "You are not authorized to use this bot.")
         return
 
-    if not prompt:
+    image_paths = tuple(image_paths)
+    if not prompt and not image_paths:
         await send_text(update, "Send a non-empty Codex request.")
         return
 
@@ -720,26 +921,34 @@ async def handle_codex_prompt(
     user = update.effective_user
     if message is not None:
         await message.reply_text("Running Codex...")
-    if chat is not None:
-        await context.bot.send_chat_action(
-            chat_id=chat.id, action=ChatAction.TYPING
-        )
 
     thread_id = store.get_thread_id(chat.id) if chat else None
-    async with semaphore:
-        returncode, answer, stderr, new_thread_id = await run_codex(
-            settings, prompt, thread_id
-        )
+    typing_task = (
+        asyncio.create_task(keep_typing(context, chat.id)) if chat is not None else None
+    )
+    try:
+        async with semaphore:
+            returncode, answer, stderr, new_thread_id = await run_codex(
+                settings, prompt, thread_id, image_paths
+            )
+    finally:
+        if typing_task is not None:
+            typing_task.cancel()
+            try:
+                await typing_task
+            except asyncio.CancelledError:
+                pass
 
     if returncode == 0 and chat is not None and new_thread_id:
         store.set_thread_id(chat.id, user.id if user else None, new_thread_id)
 
     logging.info(
-        "Codex completed for user_id=%s chat_id=%s returncode=%s thread_id=%s",
+        "Codex completed for user_id=%s chat_id=%s returncode=%s thread_id=%s images=%s",
         update.effective_user.id if update.effective_user else "unknown",
         chat.id if chat else "unknown",
         returncode,
         new_thread_id or thread_id or "none",
+        len(image_paths),
     )
     await send_text(update, format_response(returncode, answer, stderr))
 
@@ -778,7 +987,12 @@ def main() -> None:
     application.add_handler(CommandHandler("session", session_command))
     application.add_handler(CommandHandler("history", history_command))
     application.add_handler(CommandHandler("resume", resume_command))
+    for command in GRANT_COMMAND_ALIASES:
+        application.add_handler(CommandHandler(command, grant_command))
     application.add_handler(CommandHandler("codex", codex_command))
+    application.add_handler(
+        MessageHandler(filters.PHOTO | filters.Document.ALL, handle_image)
+    )
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text)
     )
