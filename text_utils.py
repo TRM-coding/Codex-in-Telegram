@@ -49,6 +49,34 @@ def format_codex_status(text: str) -> str:
     return truncate_text(f"Codex status:\n{text.strip()}", STATUS_MESSAGE_LIMIT)
 
 
+def format_recovery_suggestions(returncode: int, details: str) -> str:
+    detail_text = details.lower()
+
+    if "codex app-server request timed out" in detail_text:
+        first_step = (
+            "The bot has restarted the Codex app-server internally. "
+            "Send the request again once."
+        )
+    elif "codex timed out after" in detail_text or returncode == 124:
+        first_step = (
+            "The Codex task exceeded the configured timeout. Try a smaller request, "
+            "or send /new and retry."
+        )
+    elif "codex app-server" in detail_text:
+        first_step = "Send /new and retry once to start a fresh Codex session."
+    else:
+        first_step = "Send /new and retry once."
+
+    return (
+        "Suggested next steps:\n"
+        f"1. {first_step}\n"
+        "2. If it keeps failing, restart the bot service on the server:\n"
+        "   sudo systemctl restart codex-telegram.service\n"
+        "3. Check recent service logs:\n"
+        "   journalctl -u codex-telegram.service -n 100 --no-pager"
+    )
+
+
 def format_response(returncode: int, answer: str, stderr: str) -> str:
     if returncode == 0:
         return answer or "(Codex completed without a final message.)"
@@ -56,7 +84,11 @@ def format_response(returncode: int, answer: str, stderr: str) -> str:
         return answer or stderr or "Codex task was interrupted."
 
     details = stderr or answer or "No error details were returned."
-    return f"Codex failed with exit code {returncode}.\n\n{details}"
+    return (
+        f"Codex failed with exit code {returncode}.\n\n"
+        f"{details}\n\n"
+        f"{format_recovery_suggestions(returncode, details)}"
+    )
 
 
 def format_timestamp(timestamp: int) -> str:

@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import signal
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -16,12 +18,17 @@ from text_utils import format_codex_status, format_command_output, truncate_text
 
 
 NotificationHandler = Callable[[dict[str, Any]], Awaitable[None]]
+STOP_GRACE_SECONDS = 5
 
 
 class AppServerError(RuntimeError):
     def __init__(self, message: str, data: Any = None) -> None:
         super().__init__(message)
         self.data = data
+
+
+class AppServerTimeoutError(AppServerError):
+    pass
 
 
 class AppServerClient:
@@ -58,6 +65,7 @@ class AppServerClient:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=settings.codex_workdir,
+                start_new_session=True,
             )
             self.generation += 1
             self._reader_task = asyncio.create_task(self._read_stdout())
@@ -102,6 +110,10 @@ class AppServerClient:
 
         try:
             return await asyncio.wait_for(future, timeout=timeout)
+        except asyncio.TimeoutError as exc:
+            raise AppServerTimeoutError(
+                f"Codex app-server request timed out: {method}"
+            ) from exc
         finally:
             self._pending.pop(request_id, None)
 
@@ -202,16 +214,33 @@ class AppServerClient:
             except (BrokenPipeError, ConnectionResetError):
                 pass
         if process.returncode is None:
-            process.terminate()
+            self._signal_process_group(process, signal.SIGTERM)
             try:
                 await asyncio.wait_for(process.wait(), timeout=5)
             except asyncio.TimeoutError:
-                process.kill()
+                self._signal_process_group(process, signal.SIGKILL)
                 await process.wait()
         for task in (self._reader_task, self._stderr_task):
             if task is not None:
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
+        self._process = None
+        self._reader_task = None
+        self._stderr_task = None
+
+    def _signal_process_group(
+        self, process: asyncio.subprocess.Process, sig: signal.Signals
+    ) -> None:
+        try:
+            os.killpg(os.getpgid(process.pid), sig)
+        except ProcessLookupError:
+            return
+        except OSError:
+            if process.returncode is None:
+                if sig == signal.SIGTERM:
+                    process.terminate()
+                else:
+                    process.kill()
 
 
 @dataclass
@@ -231,6 +260,13 @@ class AppServerTurnJob:
     async def publish(self, text: str, force: bool = False) -> None:
         if self.status_callback is not None:
             await self.status_callback(format_codex_status(text), force)
+
+    def mark_interrupted(self, message: str = "Codex turn was interrupted.") -> None:
+        self.stop_requested = True
+        self.status = "interrupted"
+        self.final_text = message
+        if not self.done.done():
+            self.done.set_result(None)
 
     async def handle_notification(self, method: str, params: dict[str, Any]) -> None:
         if method == "turn/started":
@@ -273,7 +309,8 @@ class AppServerTurnJob:
 
         if method == "turn/completed":
             turn = params.get("turn") if isinstance(params.get("turn"), dict) else {}
-            self.status = str(turn.get("status") or "completed")
+            reported_status = str(turn.get("status") or "completed")
+            self.status = "interrupted" if self.stop_requested else reported_status
             error = turn.get("error")
             if isinstance(error, dict):
                 self.error_text = str(error.get("message") or self.error_text)
@@ -344,13 +381,22 @@ class AppServerCodexBackend:
         image_paths: Iterable[Path] = (),
         status_callback: StatusCallback | None = None,
     ) -> CodexResult:
-        await self._client.ensure_started(settings)
-        if self._client_generation != self._client.generation:
-            self._loaded_threads.clear()
-            self._client_generation = self._client.generation
+        try:
+            await self._client.ensure_started(settings)
+            if self._client_generation != self._client.generation:
+                self._loaded_threads.clear()
+                self._client_generation = self._client.generation
+        except AppServerTimeoutError as exc:
+            await self._restart_client("app-server initialization timed out")
+            return CodexResult(1, "", str(exc), thread_id)
+        except AppServerError as exc:
+            return CodexResult(1, "", str(exc), thread_id)
 
         try:
             active_thread_id = await self._ensure_thread(settings, thread_id)
+        except AppServerTimeoutError as exc:
+            await self._restart_client("thread setup timed out")
+            return CodexResult(1, "", str(exc), thread_id)
         except AppServerError as exc:
             return CodexResult(1, "", str(exc), thread_id)
 
@@ -368,7 +414,18 @@ class AppServerCodexBackend:
             turn = await self._start_turn(settings, job, prompt, image_paths)
             job.turn_id = str(turn.get("id") or job.turn_id or "")
             if job.stop_requested and job.turn_id:
-                await self._interrupt(job)
+                interrupted = await self._interrupt(job)
+                if interrupted:
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.shield(job.done),
+                            timeout=STOP_GRACE_SECONDS,
+                        )
+                    except asyncio.TimeoutError:
+                        await self._restart_client("turn did not stop after interrupt")
+                        job.mark_interrupted()
+                else:
+                    job.mark_interrupted()
 
             await asyncio.wait_for(job.done, timeout=settings.codex_timeout_seconds)
         except asyncio.TimeoutError:
@@ -379,6 +436,9 @@ class AppServerCodexBackend:
                 f"Codex timed out after {settings.codex_timeout_seconds} seconds.",
                 active_thread_id,
             )
+        except AppServerTimeoutError as exc:
+            await self._restart_client("app-server request timed out")
+            return CodexResult(1, "", str(exc), active_thread_id)
         except AppServerError as exc:
             return CodexResult(1, "", str(exc), active_thread_id)
         finally:
@@ -420,11 +480,32 @@ class AppServerCodexBackend:
             return "No running Codex turn is active for this chat."
         if not job.turn_id:
             return "Stop requested. Codex will be interrupted once the turn starts."
-        await self._interrupt(job)
+        interrupted = await self._interrupt(job)
+        if interrupted:
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(job.done),
+                    timeout=STOP_GRACE_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                logging.warning(
+                    "Codex turn did not stop within %s seconds; restarting app-server",
+                    STOP_GRACE_SECONDS,
+                )
+                await self._restart_client("turn did not stop after interrupt")
+                job.mark_interrupted()
+        else:
+            job.mark_interrupted()
         return "Stop requested for the running Codex turn."
 
     async def shutdown(self) -> None:
         await self._client.shutdown()
+
+    async def _restart_client(self, reason: str) -> None:
+        logging.warning("Restarting Codex app-server: %s", reason)
+        await self._client.shutdown()
+        self._loaded_threads.clear()
+        self._client_generation = self._client.generation
 
     async def _ensure_thread(self, settings: Settings, thread_id: str | None) -> str:
         if not thread_id:
@@ -462,6 +543,8 @@ class AppServerCodexBackend:
         params = {key: value for key, value in params.items() if value is not None}
         try:
             response = await self._client.request("turn/start", params)
+        except AppServerTimeoutError:
+            raise
         except AppServerError:
             self._loaded_threads.discard(job.thread_id)
             await self._ensure_thread(settings, job.thread_id)
@@ -472,17 +555,24 @@ class AppServerCodexBackend:
             raise AppServerError("Codex app-server did not return a turn.")
         return turn
 
-    async def _interrupt(self, job: AppServerTurnJob) -> None:
+    async def _interrupt(self, job: AppServerTurnJob) -> bool:
         if not job.turn_id:
-            return
+            return False
         try:
             await self._client.request(
                 "turn/interrupt",
                 {"threadId": job.thread_id, "turnId": job.turn_id},
                 timeout=20,
             )
+            return True
+        except AppServerTimeoutError as exc:
+            logging.warning("Timed out interrupting Codex turn: %s", exc)
+            await self._restart_client("turn interrupt timed out")
+            return False
         except AppServerError as exc:
             logging.warning("Failed to interrupt Codex turn: %s", exc)
+            await self._restart_client("turn interrupt failed")
+            return False
 
     async def _register_job(self, job: AppServerTurnJob) -> None:
         async with self._lock:

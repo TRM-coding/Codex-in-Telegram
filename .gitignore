@@ -5,3 +5,4 @@ __pycache__/
 *.log
 *.pid
 codex_sessions.sqlite3
+.codex-telegram/

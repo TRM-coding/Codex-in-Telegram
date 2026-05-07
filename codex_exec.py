@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import signal
 import tempfile
 from dataclasses import dataclass
@@ -14,6 +15,9 @@ from typing import Iterable
 from codex_common import CodexResult, StatusCallback
 from settings import Settings
 from text_utils import format_codex_status, format_command_output, truncate_text
+
+
+STOP_GRACE_SECONDS = 5
 
 
 @dataclass
@@ -58,7 +62,16 @@ class ExecCodexBackend:
             if job is None or job.process.returncode is not None:
                 return "No running Codex task is active for this chat."
             job.stopped = True
-            job.process.send_signal(signal.SIGINT)
+            signal_process_group(job.process, signal.SIGINT)
+        try:
+            await asyncio.wait_for(job.process.wait(), timeout=STOP_GRACE_SECONDS)
+        except asyncio.TimeoutError:
+            logging.warning(
+                "Codex exec process did not stop within %s seconds; killing it",
+                STOP_GRACE_SECONDS,
+            )
+            signal_process_group(job.process, signal.SIGKILL)
+            await job.process.wait()
         return "Stop requested for the running Codex task."
 
     async def shutdown(self) -> None:
@@ -66,7 +79,7 @@ class ExecCodexBackend:
             jobs = list(self._active_jobs.values())
         for job in jobs:
             if job.process.returncode is None:
-                job.process.terminate()
+                signal_process_group(job.process, signal.SIGTERM)
 
     async def register(self, chat_id: int | None, process: asyncio.subprocess.Process) -> None:
         if chat_id is None:
@@ -84,6 +97,18 @@ class ExecCodexBackend:
             stopped = job.stopped
             del self._active_jobs[chat_id]
             return stopped
+
+
+def signal_process_group(
+    process: asyncio.subprocess.Process, sig: signal.Signals
+) -> None:
+    try:
+        os.killpg(os.getpgid(process.pid), sig)
+    except ProcessLookupError:
+        return
+    except OSError:
+        if process.returncode is None:
+            process.send_signal(sig)
 
 
 def append_image_options(command: list[str], image_paths: Iterable[Path]) -> None:
@@ -324,6 +349,7 @@ async def run_codex(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=settings.codex_workdir,
+            start_new_session=True,
         )
         if backend is not None:
             await backend.register(chat_id, process)
@@ -348,7 +374,7 @@ async def run_codex(
             await stdout_task
             stderr_bytes = await stderr_task
         except asyncio.TimeoutError:
-            process.kill()
+            signal_process_group(process, signal.SIGKILL)
             await process.wait()
             tasks = [task for task in (stdout_task, stderr_task) if task is not None]
             if tasks:
@@ -381,6 +407,8 @@ async def run_codex(
 
         returncode = process.returncode or 0
         if returncode == -int(signal.SIGINT):
+            return CodexResult(130, "Codex task was stopped.", "", parsed_thread_id or thread_id)
+        if stopped and returncode != 0:
             return CodexResult(130, "Codex task was stopped.", "", parsed_thread_id or thread_id)
 
         return CodexResult(

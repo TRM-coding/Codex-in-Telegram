@@ -16,7 +16,7 @@ Run your local Codex CLI from Telegram, keep Codex sessions per chat, and receiv
 
 ## 中文
 
-![Codex in Telegram 架构图](assets/codex-in-telegram-cn.jpg)
+![Codex in Telegram 架构图](assets/codex-in-telegram.png)
 
 ### 项目介绍
 
@@ -62,6 +62,8 @@ Telegram reply
 ```
 
 默认后端会启动一个本地 `codex app-server`，首次请求会创建一个新的 Codex session。之后同一个 Telegram chat 中的请求会通过 app-server 的 `thread/resume` 和 `turn/start` 继续之前的上下文。运行中的任务可以通过 `/steer` 发送 steering instruction，也可以通过 `/stop` 中断当前 turn。
+
+图片会保存到 `CODEX_WORKDIR/.codex-telegram/uploads/` 并作为本地文件路径传给 Codex。Telegram 以“照片”方式发送时会提供压缩后的最大版本；如果需要 Codex 使用原始二进制图片，请在 Telegram 中以“文件/Document”方式发送图片。
 
 如果你需要旧的非交互执行方式，可以设置 `CODEX_BACKEND=exec`。该模式仍使用 `codex exec`，但不支持 `/steer`。
 
@@ -194,7 +196,7 @@ sudo journalctl -u codex-telegram.service -f
 
 ## English
 
-![Codex in Telegram architecture](assets/codex-in-telegram.svg)
+![Codex in Telegram architecture](assets/codex-in-telegram.png)
 
 ### Overview
 
@@ -240,6 +242,8 @@ Telegram reply
 ```
 
 By default, the bot starts a local `codex app-server`. The first request creates a new Codex session. Later requests in the same Telegram chat continue the context with app-server `thread/resume` and `turn/start`. While a turn is running, `/steer` sends a steering instruction and `/stop` interrupts the active turn.
+
+Images are saved under `CODEX_WORKDIR/.codex-telegram/uploads/` and passed to Codex as local file paths. Telegram photo messages provide the largest compressed photo variant; send images as files/documents when Codex needs the original binary image.
 
 Set `CODEX_BACKEND=exec` to use the older `codex exec` subprocess path. That compatibility mode does not support `/steer`.
 
