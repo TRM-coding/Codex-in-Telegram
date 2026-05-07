@@ -34,7 +34,7 @@ Run your local Codex CLI from Telegram, keep Codex sessions per chat, and receiv
 | 会话管理 | 使用 `/session` 查看当前 session，`/new` 开启新会话，`/history` 查看历史，`/resume` 恢复指定会话。 |
 | 用户访问控制 | 只有 `TELEGRAM_ALLOWED_USER_IDS` 中的 Telegram 用户可以运行 Codex。 |
 | 权限模式切换 | 使用 `/grant` 在只读、工作区写入和完整访问模式之间切换。 |
-| 长任务友好 | 支持超时配置、并发限制和 Telegram 长消息自动分段。 |
+| 长任务友好 | 支持超时配置、并发限制、运行中 `/steer`、`/stop` 和 Telegram 长消息自动分段。 |
 | 适合常驻运行 | 可通过 systemd 部署成后台服务。 |
 
 ### 工作原理
@@ -46,10 +46,10 @@ Telegram message
 Python Telegram bot
        |
        v
-codex exec --cd "$CODEX_WORKDIR" -
+codex app-server --listen stdio://
        |
        v
-Live Codex JSONL events
+Codex app-server JSON-RPC events
        |
        v
 Edited Telegram status message
@@ -61,12 +61,14 @@ Final Codex answer
 Telegram reply
 ```
 
-首次请求会创建一个新的 Codex session。之后同一个 Telegram chat 中的请求会通过 `codex exec resume <session_id> -` 继续之前的上下文。
+默认后端会启动一个本地 `codex app-server`，首次请求会创建一个新的 Codex session。之后同一个 Telegram chat 中的请求会通过 app-server 的 `thread/resume` 和 `turn/start` 继续之前的上下文。运行中的任务可以通过 `/steer` 发送 steering instruction，也可以通过 `/stop` 中断当前 turn。
+
+如果你需要旧的非交互执行方式，可以设置 `CODEX_BACKEND=exec`。该模式仍使用 `codex exec`，但不支持 `/steer`。
 
 ### 环境要求
 
 - Python 3.10 或更高版本
-- 已安装并可在 `PATH` 中访问的 Codex CLI
+- 已安装并可在 `PATH` 中访问的 Codex CLI；默认后端需要 CLI 支持 `codex app-server`
 - 一个 Telegram Bot Token
 - 允许访问该 Bot 的 Telegram 用户 ID
 
@@ -110,6 +112,8 @@ python bot.py
 | `/help` | 显示命令帮助。 |
 | `/id` | 显示 Telegram user id 和 chat id。 |
 | `/codex <request>` | 向 Codex 发送请求。普通文本消息也会作为 Codex 请求处理。 |
+| `/steer <instruction>` | 向当前正在运行的 Codex turn 发送 steering instruction。 |
+| `/stop` | 中断当前正在运行的 Codex turn。 |
 | `/session` | 查看当前 chat 绑定的 Codex session id。 |
 | `/new` | 清除当前 session，下次请求会开启新会话。 |
 | `/history` | 查看当前 chat 最近保存的 Codex sessions。 |
@@ -128,6 +132,7 @@ python bot.py
 | `TELEGRAM_BOT_TOKEN` | 无 | Telegram Bot Token，必填。 |
 | `TELEGRAM_ALLOWED_USER_IDS` | 空 | 允许使用 Codex 的 Telegram user id，多个 ID 用逗号分隔。为空时 Codex 命令会被禁用。 |
 | `CODEX_BINARY` | `codex` | Codex CLI 可执行文件名或路径。 |
+| `CODEX_BACKEND` | `app-server` | Codex 后端。`app-server` 支持 `/steer` 和 `/stop`；`exec` 使用旧的 `codex exec` 路径。 |
 | `CODEX_WORKDIR` | 当前目录 | Codex 执行任务的工作目录。 |
 | `CODEX_MODEL` | 空 | 传给 Codex CLI 的模型参数。 |
 | `CODEX_PROFILE` | 空 | 传给 Codex CLI 的 profile 参数。 |
@@ -135,7 +140,7 @@ python bot.py
 | `CODEX_APPROVAL` | `never` | Codex approval 模式，适合 Telegram 非交互执行。 |
 | `CODEX_TIMEOUT_SECONDS` | `900` | 单次 Codex 请求的最长运行时间。 |
 | `CODEX_SESSION_DB` | `CODEX_WORKDIR/codex_sessions.sqlite3` | 保存 Telegram chat 与 Codex session 映射的 SQLite 文件。 |
-| `CODEX_EXTRA_ARGS` | 空 | 附加到 `codex exec` 的额外参数。 |
+| `CODEX_EXTRA_ARGS` | 空 | `CODEX_BACKEND=exec` 时附加到 `codex exec` 的额外参数。 |
 | `CODEX_SKIP_GIT_REPO_CHECK` | `true` | 如果 Codex CLI 支持，自动添加 `--skip-git-repo-check`。 |
 | `CODEX_DANGEROUSLY_BYPASS` | `false` | 启动时是否绕过 Codex approvals 和 sandbox。只应在隔离环境中使用。 |
 | `MAX_CONCURRENT_CODEX_JOBS` | `1` | 同时运行的 Codex 任务数量。 |
@@ -207,7 +212,7 @@ It is useful when Codex runs on a development machine, server, or home lab box, 
 | Session management | Use `/session`, `/new`, `/history`, and `/resume` to inspect and switch sessions. |
 | User allowlist | Only Telegram users listed in `TELEGRAM_ALLOWED_USER_IDS` can run Codex. |
 | Runtime permission control | Use `/grant` to switch between read-only, workspace-write, and full-access modes. |
-| Long-task friendly | Supports request timeouts, concurrency limits, and Telegram message chunking. |
+| Long-task friendly | Supports request timeouts, concurrency limits, in-flight `/steer`, `/stop`, and Telegram message chunking. |
 | Service ready | Can be deployed as a long-running systemd service. |
 
 ### How It Works
@@ -219,10 +224,10 @@ Telegram message
 Python Telegram bot
        |
        v
-codex exec --cd "$CODEX_WORKDIR" -
+codex app-server --listen stdio://
        |
        v
-Live Codex JSONL events
+Codex app-server JSON-RPC events
        |
        v
 Edited Telegram status message
@@ -234,12 +239,14 @@ Final Codex answer
 Telegram reply
 ```
 
-The first request creates a new Codex session. Later requests in the same Telegram chat continue the context with `codex exec resume <session_id> -`.
+By default, the bot starts a local `codex app-server`. The first request creates a new Codex session. Later requests in the same Telegram chat continue the context with app-server `thread/resume` and `turn/start`. While a turn is running, `/steer` sends a steering instruction and `/stop` interrupts the active turn.
+
+Set `CODEX_BACKEND=exec` to use the older `codex exec` subprocess path. That compatibility mode does not support `/steer`.
 
 ### Requirements
 
 - Python 3.10 or newer
-- Codex CLI installed and available on `PATH`
+- Codex CLI installed and available on `PATH`; the default backend requires `codex app-server`
 - A Telegram Bot Token
 - The Telegram user ID that should be allowed to use the bot
 
@@ -283,6 +290,8 @@ python bot.py
 | `/help` | Show the command reference. |
 | `/id` | Show your Telegram user ID and chat ID. |
 | `/codex <request>` | Send a request to Codex. Plain text messages are also treated as Codex requests. |
+| `/steer <instruction>` | Send a steering instruction to the currently running Codex turn. |
+| `/stop` | Interrupt the currently running Codex turn. |
 | `/session` | Show the current Codex session ID for this chat. |
 | `/new` | Clear the current session. The next request starts a fresh session. |
 | `/history` | List recent Codex sessions saved for this chat. |
@@ -301,6 +310,7 @@ python bot.py
 | `TELEGRAM_BOT_TOKEN` | none | Telegram Bot Token. Required. |
 | `TELEGRAM_ALLOWED_USER_IDS` | empty | Comma-separated Telegram user IDs allowed to run Codex. Codex commands are disabled when empty. |
 | `CODEX_BINARY` | `codex` | Codex CLI binary name or path. |
+| `CODEX_BACKEND` | `app-server` | Codex backend. `app-server` supports `/steer` and `/stop`; `exec` uses the older `codex exec` path. |
 | `CODEX_WORKDIR` | current directory | Working directory where Codex runs. |
 | `CODEX_MODEL` | empty | Model argument passed to Codex CLI. |
 | `CODEX_PROFILE` | empty | Profile argument passed to Codex CLI. |
@@ -308,7 +318,7 @@ python bot.py
 | `CODEX_APPROVAL` | `never` | Codex approval mode, suitable for non-interactive Telegram execution. |
 | `CODEX_TIMEOUT_SECONDS` | `900` | Maximum runtime for one Codex request. |
 | `CODEX_SESSION_DB` | `CODEX_WORKDIR/codex_sessions.sqlite3` | SQLite file used to map Telegram chats to Codex sessions. |
-| `CODEX_EXTRA_ARGS` | empty | Extra arguments appended to `codex exec`. |
+| `CODEX_EXTRA_ARGS` | empty | Extra arguments appended to `codex exec` when `CODEX_BACKEND=exec`. |
 | `CODEX_SKIP_GIT_REPO_CHECK` | `true` | Adds `--skip-git-repo-check` when supported by the Codex CLI. |
 | `CODEX_DANGEROUSLY_BYPASS` | `false` | Start with approvals and sandbox bypassed. Use only in an isolated environment. |
 | `MAX_CONCURRENT_CODEX_JOBS` | `1` | Number of Codex jobs allowed to run at the same time. |
