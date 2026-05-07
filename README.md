@@ -16,7 +16,7 @@ Run your local Codex CLI from Telegram, keep Codex sessions per chat, and receiv
 
 ## 中文
 
-![Codex in Telegram 架构图](assets/codex-in-telegram.png)
+![Codex in Telegram 架构图](assets/codex-in-telegram-zh.png)
 
 ### 项目介绍
 
